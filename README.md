@@ -802,6 +802,38 @@ echo "   1. Перезапустите Runner: docker compose restart gitlab-run
 echo "   2. Проверьте сеть: docker compose exec gitlab-runner ping -c 2 gitlab.localdomain"
 echo "   3. Проверьте логи: docker compose logs gitlab-runner"
 ```
+🛠️ Скрипт для устранения проблем с Runner
+```bash
+#!/bin/bash
+# fix-runner-issues.sh
+
+echo "🛠️  УСТРАНЕНИЕ ПРОБЛЕМ С GITLAB RUNNER"
+
+echo "1. 🔄 Перезапуск Runner..."
+docker compose restart gitlab-runner
+sleep 5
+
+echo "2. 📊 Проверка статуса..."
+docker compose ps gitlab-runner
+
+echo "3. 🌐 Проверка сетевой связности..."
+docker compose exec gitlab-runner ping -c 2 gitlab.localdomain
+
+echo "4. 🔗 Проверка связи с GitLab..."
+docker compose exec gitlab-runner curl -s http://gitlab.localdomain/ > /dev/null && echo "✅ GitLab доступен" || echo "❌ GitLab недоступен"
+
+echo "5. 📋 Проверка конфигурации..."
+docker compose exec gitlab-runner gitlab-runner list
+
+echo "6. 📝 Логи Runner:"
+docker compose logs gitlab-runner --tail=20
+
+echo ""
+echo "🎯 РЕКОМЕНДАЦИИ:"
+echo "   • Если Runner не появляется в GitLab, проверьте registration token"
+echo "   • Если Runner offline, проверьте сетевую связность"
+echo "   • Для перерегистрации удалите конфиг: docker compose exec gitlab-runner gitlab-runner unregister --all-runners"
+```
 ---
 
 ## Создание и настройка веб-проекта
