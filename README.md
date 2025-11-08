@@ -687,6 +687,7 @@ echo "   - Если пароль не найден, возможно он уже
 8. Теперь скрипт корректно обрабатывает все нормальные сценарии запуска GitLab! 🚀
 
 ### Настройка GitLab Runner
+🔧 Улучшенный скрипт setup-runner.sh
 
 ```bash
 #!/bin/bash
@@ -694,19 +695,33 @@ echo "   - Если пароль не найден, возможно он уже
 
 echo "🔧 НАСТРОЙКА GITLAB RUNNER"
 
+# Убираем предупреждение о версии docker-compose
+export COMPOSE_FILE=~/gitlab-setup/docker-compose.yml
+
 # Ожидаем готовность GitLab
 echo "⏳ Ожидание готовности GitLab..."
-until curl -s http://gitlab.localdomain > /dev/null; do
+until curl -s http://gitlab.localdomain/users/sign_in > /dev/null; do
+    echo "   GitLab еще не готов, ждем 10 секунд..."
     sleep 10
 done
 
+echo "✅ GitLab доступен"
+
 # Получение registration token
 echo "📝 Получение registration token..."
-REGISTRATION_TOKEN=$(docker-compose exec gitlab gitlab-rails runner -e production "puts Gitlab::CurrentSettings.current_application_settings.runners_registration_token")
+REGISTRATION_TOKEN=$(docker compose exec gitlab gitlab-rails runner -e production "puts Gitlab::CurrentSettings.current_application_settings.runners_registration_token")
 
 if [ -z "$REGISTRATION_TOKEN" ]; then
-    echo "❌ Не удалось получить registration token"
-    echo "💡 Попробуйте получить вручную из интерфейса GitLab"
+    echo "❌ Не удалось получить registration token автоматически"
+    echo ""
+    echo "💡 Альтернативные способы:"
+    echo "1. В веб-интерфейсе GitLab:"
+    echo "   - Откройте http://gitlab.localdomain"
+    echo "   - Admin -> CI/CD -> Runners"
+    echo "   - Скопируйте 'Registration token'"
+    echo ""
+    echo "2. Или выполните команду вручную:"
+    echo "   docker compose exec gitlab gitlab-rails runner -e production \"puts Gitlab::CurrentSettings.current_application_settings.runners_registration_token\""
     exit 1
 fi
 
@@ -714,7 +729,8 @@ echo "✅ Registration token получен"
 
 # Регистрация Runner
 echo "🚀 Регистрация GitLab Runner..."
-docker-compose exec gitlab-runner gitlab-runner register \
+
+docker compose exec gitlab-runner gitlab-runner register \
   --non-interactive \
   --url "http://gitlab.localdomain/" \
   --registration-token "$REGISTRATION_TOKEN" \
@@ -729,13 +745,63 @@ docker-compose exec gitlab-runner gitlab-runner register \
   --docker-volumes "/cache" \
   --docker-volumes "/builds:/builds"
 
-echo "✅ GitLab Runner успешно зарегистрирован"
+if [ $? -eq 0 ]; then
+    echo "✅ GitLab Runner успешно зарегистрирован"
+else
+    echo "❌ Ошибка при регистрации Runner"
+    exit 1
+fi
 
 # Проверка статуса
 echo "📊 Проверка статуса Runner..."
-docker-compose exec gitlab-runner gitlab-runner list
-```
+docker compose exec gitlab-runner gitlab-runner list
 
+echo ""
+echo "🎉 GITLAB RUNNER НАСТРОЕН УСПЕШНО!"
+echo ""
+echo "📋 ИНФОРМАЦИЯ О RUNNER:"
+echo "   • Имя: web-development-runner"
+echo "   • Executor: docker"
+echo "   • Docker image: alpine:latest"
+echo "   • Теги: docker,linux,web,less"
+echo "   • URL: http://gitlab.localdomain/"
+echo ""
+echo "🔍 ДЛЯ ПРОВЕРКИ В GITLAB:"
+echo "   1. Откройте: http://gitlab.localdomain/admin/runners"
+echo "   2. Найдите runner 'web-development-runner'"
+echo "   3. Статус должен быть 'online'"
+echo ""
+echo "🚀 Теперь можно создавать проекты и запускать пайплайны!"
+```
+🔍 Скрипт для проверки статуса Runner
+```bash
+#!/bin/bash
+# check-runner-status.sh
+
+echo "🔍 ПРОВЕРКА СТАТУСА GITLAB RUNNER"
+
+echo "📊 Локальный статус Runner:"
+docker compose exec gitlab-runner gitlab-runner list
+
+echo ""
+echo "🌐 Проверка в GitLab:"
+echo "   Откройте: http://gitlab.localdomain/admin/runners"
+echo "   Или для конкретного проекта: http://gitlab.localdomain/root/ваш-проект/-/settings/ci_cd"
+
+echo ""
+echo "🐳 Статус контейнеров:"
+docker compose ps | grep -E "(runner|gitlab)"
+
+echo ""
+echo "📈 Логи Runner (последние 10 строк):"
+docker compose logs gitlab-runner --tail=10
+
+echo ""
+echo "💡 ЕСЛИ RUNNER НЕ ОНЛАЙН:"
+echo "   1. Перезапустите Runner: docker compose restart gitlab-runner"
+echo "   2. Проверьте сеть: docker compose exec gitlab-runner ping -c 2 gitlab.localdomain"
+echo "   3. Проверьте логи: docker compose logs gitlab-runner"
+```
 ---
 
 ## Создание и настройка веб-проекта
