@@ -461,12 +461,22 @@ echo "🎯 УЛУЧШЕННЫЙ МОНИТОРИНГ ЗАПУСКА GITLAB"
 check_gitlab_health() {
     local container_status=$(docker inspect gitlab --format='{{.State.Health.Status}}' 2>/dev/null)
     local http_status=$(curl -s -o /dev/null -w "%{http_code}" http://gitlab.localdomain 2>/dev/null)
-    local logs_status=$(docker-compose logs gitlab 2>/dev/null | tail -5)
+    local login_page_status=$(curl -s -o /dev/null -w "%{http_code}" http://gitlab.localdomain/users/sign_in 2>/dev/null)
     
     echo "📊 Статус контейнера: $container_status"
-    echo "🌐 HTTP статус: $http_status"
+    echo "🌐 HTTP статус главной страницы: $http_status"
+    echo "🔐 HTTP статус страницы входа: $login_page_status"
     
-    if [ "$http_status" = "200" ]; then
+    # GitLab считается доступным если:
+    # - Страница входа возвращает 200 (уже настроен)
+    # - ИЛИ главная страница возвращает 302 (редирект на логин) + есть пароль
+    # - ИЛИ главная страница возвращает 200 (уже вошли)
+    
+    if [ "$login_page_status" = "200" ]; then
+        echo "✅ Страница входа доступна"
+        return 0
+    elif [ "$http_status" = "302" ] || [ "$http_status" = "200" ]; then
+        echo "⚠️ GitLab отвечает (редирект или главная страница)"
         return 0
     else
         return 1
@@ -474,59 +484,198 @@ check_gitlab_health() {
 }
 
 get_root_password() {
+    echo "🔍 Поиск root пароля..."
+    
+    # Пробуем несколько способов найти пароль
     local password=$(docker-compose exec gitlab grep 'Password:' /etc/gitlab/initial_root_password 2>/dev/null | cut -d: -f2- | sed 's/^ *//;s/ *$//')
     
     if [ -n "$password" ]; then
         echo "🔐 ROOT PASSWORD: $password"
         return 0
     else
-        echo "⚠️ Пароль не найден в стандартном месте"
+        # Проверяем, существует ли файл
+        local file_exists=$(docker-compose exec gitlab ls /etc/gitlab/initial_root_password 2>/dev/null | wc -l)
+        if [ "$file_exists" -eq 0 ]; then
+            echo "⚠️ Файл с паролем не найден. Возможно, пароль уже был использован."
+            echo "💡 Если вы забыли пароль, сбросьте его:"
+            echo "   docker-compose exec gitlab gitlab-rake 'gitlab:password:reset[root]'"
+        else
+            echo "❌ Не удалось извлечь пароль из файла"
+        fi
+        return 1
+    fi
+}
+
+check_gitlab_fully_ready() {
+    # Проверяем, что GitLab полностью готов к работе
+    local response=$(curl -s http://gitlab.localdomain/users/sign_in)
+    if echo "$response" | grep -q "sign_in"; then
+        return 0
+    else
         return 1
     fi
 }
 
 echo "⏳ Начало мониторинга запуска GitLab..."
 echo "📝 Это может занять 10-15 минут..."
+echo "💡 Ожидаемые статусы:"
+echo "   - 302 → Редирект на страницу входа (НОРМА)"
+echo "   - 200 → Страница доступна (ОТЛИЧНО)"
+echo ""
 
-for i in {1..60}; do
+# Счетчики для статистики
+total_checks=0
+healthy_checks=0
+
+for i in {1..90}; do  # Увеличили до 90 проверок (15 минут)
     echo ""
-    echo "🔍 Проверка #$i ($(date))"
+    echo "🔍 Проверка #$i ($(date +'%H:%M:%S'))"
+    
+    total_checks=$((total_checks + 1))
     
     if check_gitlab_health; then
-        echo ""
-        echo "🎉 GITLAB УСПЕШНО ЗАПУЩЕН!"
-        echo ""
+        healthy_checks=$((healthy_checks + 1))
+        echo "✅ GitLab отвечает на запросы"
         
-        # Даем время на финальную инициализацию
+        # Даем GitLab дополнительное время для полной инициализации
+        echo "⏳ Даем время для полной инициализации (30 секунд)..."
         sleep 30
         
-        echo "🔒 Получение пароля root..."
-        if get_root_password; then
+        # Проверяем, полностью ли готов GitLab
+        if check_gitlab_fully_ready; then
             echo ""
-            echo "🚀 СИСТЕМА ГОТОВА К РАБОТЕ!"
-            echo "🌐 GitLab: http://gitlab.localdomain"
-            echo "👤 Логин: root"
-            echo "🔑 Пароль: (см. выше)"
+            echo "🎉 GITLAB ПОЛНОСТЬЮ ЗАПУЩЕН И ГОТОВ К РАБОТЕ!"
+            echo ""
+            
+            # Статистика
+            echo "📊 СТАТИСТИКА ЗАПУСКА:"
+            echo "   • Всего проверок: $total_checks"
+            echo "   • Успешных проверок: $healthy_checks"
+            echo "   • Процент успеха: $((healthy_checks * 100 / total_checks))%"
+            echo ""
+            
+            echo "🔒 Получение пароля root..."
+            if get_root_password; then
+                echo ""
+                echo "🚀 СИСТЕМА ГОТОВА К РАБОТЕ!"
+                echo "🌐 GitLab: http://gitlab.localdomain"
+                echo "👤 Логин: root"
+                echo "🔑 Пароль: (см. выше)"
+                echo ""
+                echo "💡 Если пароль не подходит:"
+                echo "   1. Попробуйте получить его вручную:"
+                echo "      docker-compose exec gitlab cat /etc/gitlab/initial_root_password"
+                echo "   2. Или сбросьте пароль:"
+                echo "      docker-compose exec gitlab gitlab-rake 'gitlab:password:reset[root]'"
+            else
+                echo ""
+                echo "⚠️  Пароль не получен автоматически"
+                echo "🌐 GitLab доступен по: http://gitlab.localdomain"
+                echo "💡 Используйте один из методов выше для получения пароля"
+            fi
+            
+            exit 0
         else
-            echo "❌ Не удалось получить пароль автоматически"
-            echo "💡 Попробуйте вручную: docker-compose exec gitlab cat /etc/gitlab/initial_root_password"
+            echo "⏳ GitLab запущен, но еще не полностью готов. Продолжаем ожидание..."
         fi
-        
-        exit 0
+    else
+        echo "❌ GitLab не отвечает или возвращает ошибку"
     fi
     
-    echo "⏳ Ожидание... (10 секунд)"
+    # Прогресс
+    if [ $((i % 5)) -eq 0 ]; then
+        echo ""
+        echo "📈 Прогресс: $i/90 проверок ($((i * 100 / 90))%)"
+        echo "💾 Текущее использование памяти Docker:"
+        docker stats --no-stream --format "table {{.Name}}\t{{.MemPerc}}\t{{.MemUsage}}" | head -5 2>/dev/null || echo "   (недоступно)"
+    fi
+    
+    echo "⏳ Следующая проверка через 10 секунд..."
     sleep 10
 done
 
 echo ""
-echo "❌ ПРЕВЫШЕНО ВРЕМЯ ОЖИДАНИЯ"
+echo "❌ ПРЕВЫШЕНО ВРЕМЯ ОЖИДАНИЯ (15 минут)"
+echo ""
+echo "🔍 ДИАГНОСТИКА:"
 echo "💡 GitLab все еще может запускаться. Проверьте вручную:"
-echo "   docker-compose logs gitlab"
-echo "   curl http://gitlab.localdomain"
+
+# Проверяем текущий статус
+echo ""
+echo "📊 ТЕКУЩИЙ СТАТУС:"
+docker-compose ps gitlab
+
+echo ""
+echo "📋 ЛОГИ ПОСЛЕДНИХ ОШИБОК:"
+docker-compose logs gitlab --tail=20 | grep -i error | tail -5 || echo "   Ошибок не найдено"
+
+echo ""
+echo "🚀 РУЧНАЯ ПРОВЕРКА:"
+echo "   1. Проверьте логи: docker-compose logs gitlab --tail=50"
+echo "   2. Проверьте доступность: curl -v http://gitlab.localdomain"
+echo "   3. Проверьте пароль: docker-compose exec gitlab cat /etc/gitlab/initial_root_password"
+echo "   4. Если GitLab не запускается, попробуйте: docker-compose restart gitlab"
+
+echo ""
+echo "📊 ИТОГОВАЯ СТАТИСТИКА:"
+echo "   • Всего проверок: $total_checks"
+echo "   • Успешных проверок: $healthy_checks"
+echo "   • Процент успеха: $((healthy_checks * 100 / total_checks))%"
+
 exit 1
 ```
+🔧 Дополнительный скрипт для быстрой проверки статуса
+```bash
+#!/bin/bash
+# check-gitlab-status.sh
 
+echo "🔍 БЫСТРАЯ ПРОВЕРКА СТАТУСА GITLAB"
+
+echo "📊 Статус контейнера:"
+docker-compose ps gitlab
+
+echo ""
+echo "🌐 Проверка доступности:"
+
+# Проверяем разные endpoints
+endpoints=(
+    "http://gitlab.localdomain"
+    "http://gitlab.localdomain/users/sign_in" 
+    "http://gitlab.localdomain/api/v4/version"
+)
+
+for endpoint in "${endpoints[@]}"; do
+    status_code=$(curl -s -o /dev/null -w "%{http_code}" "$endpoint")
+    case $status_code in
+        200) echo "   ✅ $endpoint - 200 OK" ;;
+        302) echo "   🔄 $endpoint - 302 Redirect (нормально для входа)" ;;
+        401) echo "   🔐 $endpoint - 401 Unauthorized (требуется вход)" ;;
+        000) echo "   ❌ $endpoint - Недоступен" ;;
+        *) echo "   ⚠️  $endpoint - $status_code (нестандартный статус)" ;;
+    esac
+done
+
+echo ""
+echo "🔑 Проверка root пароля:"
+password=$(docker-compose exec gitlab grep 'Password:' /etc/gitlab/initial_root_password 2>/dev/null | cut -d: -f2- | sed 's/^ *//;s/ *$//')
+
+if [ -n "$password" ]; then
+    echo "   ✅ Пароль найден: ${password:0:10}..." # Показываем только начало
+else
+    echo "   ❌ Пароль не найден в стандартном месте"
+    echo "   💡 Файл существует: $(docker-compose exec gitlab ls /etc/gitlab/initial_root_password 2>/dev/null && echo "Да" || echo "Нет")"
+fi
+
+echo ""
+echo "📈 Использование ресурсов:"
+docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}" | head -5
+
+echo ""
+echo "💡 РЕКОМЕНДАЦИИ:"
+echo "   - Статус 302 на главной странице - НОРМАЛЬНО (редирект на вход)"
+echo "   - Статус 200 на /users/sign_in - GitLab готов к работе"
+echo "   - Если пароль не найден, возможно он уже был использован"
+```
 ### Настройка GitLab Runner
 
 ```bash
