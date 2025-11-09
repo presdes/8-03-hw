@@ -24,8 +24,8 @@
 │   ├── troubleshoot.sh                 # Устранение неполадок
 │   │
 │   │   # 🗑️ Скрипты очистки
-│   ├── reset-project.sh                # Безопасная очистка
-│   └── full_reset_docker.sh            # Полная очистка Docker
+│   ├── reset-project.sh                # ⚠️ Безопасная очистка
+│   └── full_reset_docker.sh            # ⚠️ Полная очистка Docker
 │
 └── web-dev-project/                # 🌐 Пример веб-проекта для тестирования
     ├── .gitlab-ci.yml              # ⚠️ ОБЯЗАТЕЛЬНО В КОРНЕ: Конфигурация CI/CD
